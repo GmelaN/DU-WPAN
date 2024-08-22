@@ -21,6 +21,7 @@
 #include <ns3/propagation-loss-model.h>
 #include <ns3/simulator.h>
 #include <ns3/single-model-spectrum-channel.h>
+#include <ns3/callback.h>
 
 #include <iostream>
 
@@ -126,11 +127,21 @@ PANNetwork* setup()
         network->nodes[i] = CreateObject<Node>();
         nodeNetDevice = CreateObject<LrWpanNetDevice>();
         nodeNetDevice->SetAddress(Mac16Address((uint16_t) i + 2));
+        nodeNetDevice->SetChannel(network->channels[0]);
         network->nodes[i]->AddDevice(nodeNetDevice);
     }
 
+    return network;
 }
 
+void
+hookMcpsDataConfirmCallbacks(PANNetwork* network, McpsDataConfirmCallback cb,  void *(callback)(McpsDataConfirmParams))
+{
+    Ptr<LrWpanNetDevice> netDevice = DynamicCast<LrWpanNetDevice>(network->coordinator->GetDevice(0));
+    netDevice->GetMac()->SetMcpsDataConfirmCallback(callback);
+
+    return;
+}
 
 int
 main(int argc, char* argv[])
@@ -140,37 +151,7 @@ main(int argc, char* argv[])
     LogComponentEnable("LrWpanMac", LOG_LEVEL_INFO);
     LogComponentEnable("LrWpanCsmaCa", LOG_LEVEL_INFO);
 
-    LrWpanHelper lrWpanHelper;
-
-    Ptr<LrWpanNetDevice> dev0 = CreateObject<LrWpanNetDevice>();
-    Ptr<LrWpanNetDevice> dev1 = CreateObject<LrWpanNetDevice>();
-
-    dev0->SetAddress(Mac16Address("00:01"));
-    dev1->SetAddress(Mac16Address("00:02"));
-
-    Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
-    Ptr<LogDistancePropagationLossModel> propModel =
-        CreateObject<LogDistancePropagationLossModel>();
-    Ptr<ConstantSpeedPropagationDelayModel> delayModel =
-        CreateObject<ConstantSpeedPropagationDelayModel>();
-    channel->AddPropagationLossModel(propModel);
-    channel->SetPropagationDelayModel(delayModel);
-
-    dev0->SetChannel(channel);
-    dev1->SetChannel(channel);
-
-    n0->AddDevice(dev0);
-    n1->AddDevice(dev1);
-
-    Ptr<ConstantPositionMobilityModel> sender0Mobility =
-        CreateObject<ConstantPositionMobilityModel>();
-    sender0Mobility->SetPosition(Vector(0, 0, 0));
-    dev0->GetPhy()->SetMobility(sender0Mobility);
-    Ptr<ConstantPositionMobilityModel> sender1Mobility =
-        CreateObject<ConstantPositionMobilityModel>();
-
-    sender1Mobility->SetPosition(Vector(0, 10, 0)); // 10 m distance
-    dev1->GetPhy()->SetMobility(sender1Mobility);
+    PANNetwork* network = setup();
 
     /////// MAC layer Callbacks hooks/////////////
     MlmeStartConfirmCallback cb0;
