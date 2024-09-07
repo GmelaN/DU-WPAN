@@ -86,12 +86,12 @@ changeChannel(Ptr<Node> node, Ptr<SpectrumChannel> targetChannel)
 #define NODE_COUNT 10
 #define CHANNEL_COUNT 3
 
-typedef struct PANNetwork
+typedef struct PANNetworkStruct
 {
     Ptr<Node> coordinator;
     Ptr<Node> nodes[NODE_COUNT];
     Ptr<SingleModelSpectrumChannel> channels[CHANNEL_COUNT];
-};
+} PANNetwork;
 
 PANNetwork* setup()
 {
@@ -143,6 +143,15 @@ hookMcpsDataConfirmCallbacks(PANNetwork* network, McpsDataConfirmCallback cb,  v
     return;
 }
 
+void
+hookMlmeStartConfirmCallbacks(PANNetwork* network, MlmeStartConfirmCallback cb,  void *(callback)(MlmeStartConfirmParams))
+{
+    Ptr<LrWpanNetDevice> netDevice = DynamicCast<LrWpanNetDevice>(network->coordinator->GetDevice(0));
+    netDevice->GetMac()->SetMlmeStartConfirmCallback(callback);
+
+    return;
+}
+
 int
 main(int argc, char* argv[])
 {
@@ -151,28 +160,23 @@ main(int argc, char* argv[])
     LogComponentEnable("LrWpanMac", LOG_LEVEL_INFO);
     LogComponentEnable("LrWpanCsmaCa", LOG_LEVEL_INFO);
 
-    PANNetwork* network = setup();
-
     /////// MAC layer Callbacks hooks/////////////
-    MlmeStartConfirmCallback cb0;
-    cb0 = MakeCallback(&StartConfirm);
-    dev0->GetMac()->SetMlmeStartConfirmCallback(cb0);
 
-    McpsDataConfirmCallback cb1;
-    cb1 = MakeCallback(&TransEndIndication);
-    dev1->GetMac()->SetMcpsDataConfirmCallback(cb1);
+    // McpsDataConfirmCallback cb1;
+    // cb1 = MakeCallback(&TransEndIndication);
+    // dev1->GetMac()->SetMcpsDataConfirmCallback(cb1);
 
-    MlmeBeaconNotifyIndicationCallback cb3;
-    cb3 = MakeCallback(&BeaconIndication);
-    dev1->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
+    // MlmeBeaconNotifyIndicationCallback cb3;
+    // cb3 = MakeCallback(&BeaconIndication);
+    // dev1->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
 
-    McpsDataIndicationCallback cb4;
-    cb4 = MakeCallback(&DataIndication);
-    dev1->GetMac()->SetMcpsDataIndicationCallback(cb4);
+    // McpsDataIndicationCallback cb4;
+    // cb4 = MakeCallback(&DataIndication);
+    // dev1->GetMac()->SetMcpsDataIndicationCallback(cb4);
 
-    McpsDataIndicationCallback cb5;
-    cb5 = MakeCallback(&DataIndicationCoordinator);
-    dev0->GetMac()->SetMcpsDataIndicationCallback(cb5);
+    // McpsDataIndicationCallback cb5;
+    // cb5 = MakeCallback(&DataIndicationCoordinator);
+    // dev0->GetMac()->SetMcpsDataIndicationCallback(cb5);
 
     //////////// Manual device association ////////////////////
     // Note: We manually associate the devices to a PAN coordinator
