@@ -36,27 +36,96 @@ using namespace std;
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 10 // PAN network count
-#define NODE_COUNT 20 // node in each PAN count
+#define PAN_COUNT 10    // PAN network count
+#define NODE_COUNT 20   // node in each PAN count
 
-class PANNetwork
+
+class PANNetwork: public Object
 {
+    static int totalPanId;
+
     public:
+        static TypeId GetTypeId(void) {
+            static TypeId tid = TypeId("PANNetwork")
+                .SetParent<Object>()  // Object 상속 설정
+                .SetGroupName("Network")
+                .AddConstructor<PANNetwork>();  // 생성자 등록
+            return tid;
+        }
+
     PANNetwork(int nodeCount)
     {
+        // setup helpers
+        this->mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        this->mobility.SetPositionAllocator("ns3::GridPositionAllocator",
+                                    "MinX",
+                                    DoubleValue(0.0),
+                                    "MinY",
+                                    DoubleValue(0.0),
+                                    "DeltaX",
+                                    DoubleValue(30.0),
+                                    "DeltaY",
+                                    DoubleValue(30.0),
+                                    "GridWidth",
+                                    UintegerValue(20),
+                                    "LayoutType",
+                                    StringValue("RowFirst"));
+
+        Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
+        Ptr<LogDistancePropagationLossModel> propModel =
+            CreateObject<LogDistancePropagationLossModel>();
+        Ptr<ConstantSpeedPropagationDelayModel> delayModel =
+            CreateObject<ConstantSpeedPropagationDelayModel>();
+
+        channel->AddPropagationLossModel(propModel);
+        channel->SetPropagationDelayModel(delayModel);
+
+        this->channel = channel;
+
+        // install mobiilty
         nodes.Create(nodeCount);
+
         for(int i = 0; i < nodeCount; i++)
         {
             Ptr<Node> node = this->nodes.Get(i);
-            Ptr<LrWpanNetDevice> device = CreateObject<LrWpanNetDevice>();
-            node->AddDevice(device);
-            devices.Add(device);
         }
     }
 
-    NetDeviceContainer GetDevices()
+    PANNetwork()
     {
-        return devices;
+        // setup helpers
+        this->mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+        this->mobility.SetPositionAllocator("ns3::GridPositionAllocator",
+                                    "MinX",
+                                    DoubleValue(0.0),
+                                    "MinY",
+                                    DoubleValue(0.0),
+                                    "DeltaX",
+                                    DoubleValue(30.0),
+                                    "DeltaY",
+                                    DoubleValue(30.0),
+                                    "GridWidth",
+                                    UintegerValue(20),
+                                    "LayoutType",
+                                    StringValue("RowFirst"));
+
+        Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
+        Ptr<LogDistancePropagationLossModel> propModel =
+            CreateObject<LogDistancePropagationLossModel>();
+        Ptr<ConstantSpeedPropagationDelayModel> delayModel =
+            CreateObject<ConstantSpeedPropagationDelayModel>();
+
+        channel->AddPropagationLossModel(propModel);
+        channel->SetPropagationDelayModel(delayModel);
+
+        this->channel = channel;
+
+        // install mobiilty
+        nodes.Create(10);
+        for(int i = 0; i < 10; i++)
+        {
+            Ptr<Node> node = this->nodes.Get(i);
+        }
     }
 
     NodeContainer GetNodes()
@@ -64,21 +133,40 @@ class PANNetwork
         return nodes;
     }
 
-    // SingleModelSpectrumChannel GetChannel()
-    // {
-    //     return channel;
-    // }
+    NetDeviceContainer GetDevices() // must used after Install()
+    {
+        return devices;
+    }
 
-    // void SetChannel(SingleModelSpectrumChannel channel)
-    // {
-    //     this->channel = channel;
-    // }
+    Ptr<Channel> GetChannel()
+    {
+        return channel;
+    }
+
+    void SetChannel(Ptr<SingleModelSpectrumChannel> channel)
+    {
+        this->channel = channel;
+        this->helper.SetChannel(channel);
+    }
+
+    void Install()
+    {
+        this->mobility.Install(this->nodes);
+        this->devices = this->helper.Install(this->nodes);
+        this->helper.CreateAssociatedPan(this->devices, totalPanId++);
+    }
 
     private:
-        NetDeviceContainer devices;
         NodeContainer nodes;
-        // SingleModelSpectrumChannel channel;
+        NetDeviceContainer devices;
+
+        Ptr<SingleModelSpectrumChannel> channel;
+
+        LrWpanHelper helper;
+        MobilityHelper mobility;
 };
+
+int PANNetwork::totalPanId = 0;
 
 static void
 McpsDataConfirm(Ptr<LrWpanNetDevice> device, McpsDataConfirmParams params)
@@ -104,31 +192,15 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnableAll(LogLevel(LOG_PREFIX_TIME | LOG_PREFIX_FUNC | LOG_PREFIX_NODE));
+    LogComponentEnable("LrWpanMac", LOG_DEBUG);
 
-    vector<PANNetwork> panNetworks;
+    vector<Ptr<PANNetwork>> panNetworks;
 
     for(int i = 0; i < PAN_COUNT; i++)
     {
-        panNetworks.push_back(PANNetwork(NODE_COUNT));
+        Ptr<PANNetwork> network = CreateObject<PANNetwork>(NODE_COUNT);
+        panNetworks.push_back(network);
     }
-
-    MobilityHelper mobility;
-    LrWpanHelper lrWpanHelper;
-
-    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    mobility.SetPositionAllocator("ns3::GridPositionAllocator",
-                                  "MinX",
-                                  DoubleValue(0.0),
-                                  "MinY",
-                                  DoubleValue(0.0),
-                                  "DeltaX",
-                                  DoubleValue(30.0),
-                                  "DeltaY",
-                                  DoubleValue(30.0),
-                                  "GridWidth",
-                                  UintegerValue(20),
-                                  "LayoutType",
-                                  StringValue("RowFirst"));
 
     Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
     Ptr<LogDistancePropagationLossModel> propModel =
@@ -139,39 +211,33 @@ main(int argc, char* argv[])
     channel->AddPropagationLossModel(propModel);
     channel->SetPropagationDelayModel(delayModel);
 
-    lrWpanHelper.SetChannel(channel);
-    
-    int i = 0;
-    for(vector<PANNetwork>::iterator device = panNetworks.begin(); device < panNetworks.end(); device++)
+    for(vector<Ptr<PANNetwork>>::iterator device = panNetworks.begin(); device < panNetworks.end(); device++)
     {
-        mobility.Install(device->GetNodes());
-        lrWpanHelper.CreateAssociatedPan(device->GetDevices(), ++i);
+        (*device)->Install();
     }
 
-    lrWpanHelper.EnableLogComponents();
+    Ptr<LrWpanNetDevice> dev = DynamicCast<LrWpanNetDevice>((*panNetworks.at(0)).GetDevices().Get(0));
 
-    // Ptr<LrWpanNetDevice> dev = DynamicCast<LrWpanNetDevice>(panNetworks.at(0).GetDevices().Get(0));
-    
-    // McpsDataRequestParams params;
-    // params.m_dstAddr = Mac16Address("00:03");
-    // params.m_txOptions = TX_OPTION_NONE;
-    // params.m_msduHandle = 0;
+    McpsDataRequestParams params;
+    params.m_dstAddr = Mac16Address("00:03");
+    params.m_txOptions = TX_OPTION_NONE;
+    params.m_msduHandle = 0;
 
-    // Ptr<Packet> packet = Create<Packet>(50);
+    Ptr<Packet> packet = Create<Packet>(50);
 
-    // Simulator::ScheduleWithContext(
-    //     0,
-    //     Seconds(5),
-    //     &LrWpanMac::McpsDataRequest,
-    //     dev->GetMac(),
-    //     params,
-    //     packet
-    // );
+    Simulator::ScheduleWithContext(
+        0,
+        Seconds(5),
+        &LrWpanMac::McpsDataRequest,
+        dev->GetMac(),
+        params,
+        packet
+    );
 
     Simulator::Stop(Seconds(1500));
     Simulator::Run();
 
-    // Callback cb = MakeCallback(&DebugCallback);
+    // 집단 콜백 지정 필요
 
     Simulator::Schedule(
         Seconds(1),
