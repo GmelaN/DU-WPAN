@@ -32,13 +32,14 @@
 #include <vector>
 #include <iostream>
 
-using namespace std;
+// using namespace std;
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 10    // PAN network count
-#define NODE_COUNT 20   // node in each PAN count
+#define PAN_COUNT 11    // PAN network count
+#define NODE_COUNT 5   // node in each PAN count
 
+#define PACKET_SIZE 50 // packet size
 
 class PANNetwork: public Object
 {
@@ -88,6 +89,7 @@ class PANNetwork: public Object
             {
                 Ptr<Node> node = this->nodes.Get(i);
             }
+            this->networkId = totalPanId++;
         }
 
         PANNetwork()
@@ -125,33 +127,44 @@ class PANNetwork: public Object
             {
                 Ptr<Node> node = this->nodes.Get(i);
             }
+            this->networkId = totalPanId++;
         }
 
         // callback methods
         static void McpsDataConfirmCallback(McpsDataConfirmParams params)
         {
-            NS_LOG_UNCOND(Simulator::Now() << "\t" << params.m_status << ": MCPS-DATA confirmed.");
+            // NS_LOG_UNCOND(Simulator::Now() << "\t" << params.m_status << ": MCPS-DATA confirmed.");
         }
 
         static void McpsDataIndicationCallback(McpsDataIndicationParams params, Ptr<Packet> packet)
         {
-            NS_LOG_UNCOND(Simulator::Now() << "\tfrom " << params.m_srcAddr << "\tto " << params.m_dstAddr << ": MCPS-DATA.indication");
+            // NS_LOG_UNCOND(Simulator::Now() << "\tfrom " << params.m_srcExtAddr << "\tto " << params.m_dstExtAddr << ": MCPS-DATA.indication");
+        }
+
+        static void BeaconIndicationCallback(MlmeBeaconNotifyIndicationParams params)
+        {
+            // NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " secs | Received BEACON packet of size ");
         }
 
         // getter, setter
         NodeContainer GetNodes()
         {
-            return nodes;
+            return this->nodes;
         }
 
         NetDeviceContainer GetDevices() // must used after Install()
         {
-            return devices;
+            return this->devices;
         }
 
         Ptr<Channel> GetChannel()
         {
-            return channel;
+            return this->channel;
+        }
+
+        int GetNetworkId()
+        {
+            return this->networkId;
         }
 
         void SetChannel(Ptr<SingleModelSpectrumChannel> channel)
@@ -165,22 +178,97 @@ class PANNetwork: public Object
         {
             this->mobility.Install(this->nodes);
             this->devices = this->helper.Install(this->nodes);
-            this->helper.CreateAssociatedPan(this->devices, totalPanId++);
+            this->helper.CreateAssociatedPan(this->devices, this->networkId);
         }
 
         void InstallCallbacks()
+        {
+            NS_LOG_UNCOND("Installing callbacks...(ID: " << this->networkId << ")");
+            for(uint32_t i = 0; i < this->devices.GetN(); i++) // first device is coordinator
             {
-                for(auto device = this->devices.Begin(); device < this->devices.End(); device++)
-                {
-                    Ptr<LrWpanNetDevice> dev = DynamicCast<LrWpanNetDevice>((*device));
+                Ptr<NetDevice> device = this->devices.Get(i);
+                Ptr<LrWpanNetDevice> dev = DynamicCast<LrWpanNetDevice>(device);
 
-                    // 각 콜백을 static 메서드로 설정
-                    dev->GetMac()->SetMcpsDataConfirmCallback(MakeCallback(&PANNetwork::McpsDataConfirmCallback));
-                    dev->GetMac()->SetMcpsDataIndicationCallback(MakeCallback(&PANNetwork::McpsDataIndicationCallback));
-                }
+                // 각 콜백을 static 메서드로 설정
+                dev->GetMac()->SetMcpsDataConfirmCallback(MakeCallback(&PANNetwork::McpsDataConfirmCallback));
+                dev->GetMac()->SetMcpsDataIndicationCallback(MakeCallback(&PANNetwork::McpsDataIndicationCallback));
+                dev->GetMac()->SetMlmeBeaconNotifyIndicationCallback(MakeCallback(&PANNetwork::BeaconIndicationCallback));
             }
+        }
+
+        void Start(int logicalChannel)
+        {
+            logicalChannel = logicalChannel % 16 + 11;
+
+            NS_LOG_UNCOND("Scheduling MLME-START.request...(ID: " << this->networkId << ")");
+
+            // 각 네트워크의 가장 첫 번째 디바이스가 코디네이터임
+            Ptr<LrWpanNetDevice> coordinatorNetDevice = DynamicCast<LrWpanNetDevice>(*(this->GetDevices().Begin()));
+            // NS_LOG_UNCOND("coordinator address is: " << coordinatorNetDevice->GetAddress());
+
+            // MCPS-DATA.request 파라미터
+            MlmeStartRequestParams params;
+            params.m_PanId = this->networkId;
+            params.m_panCoor = true;
+            params.m_bcnOrd = 10;
+            params.m_logCh = logicalChannel; // 11~26
+
+            Time jitter = Seconds(1) + MilliSeconds(this->GetNetworkId() * (100 * this->GetNetworkId()));
+
+            Simulator::ScheduleWithContext(
+                this->networkId,
+                jitter,
+                &LrWpanMac::MlmeStartRequest,
+                coordinatorNetDevice->GetMac(),
+                params
+            );
+        }
+
+        void SendData()
+        {
+            NS_LOG_UNCOND("Scheduling MCPS-DATA.request...(ID: " << this->networkId << ")");
+
+            // 각 네트워크의 가장 첫 번째 디바이스가 코디네이터임
+            Ptr<LrWpanNetDevice> coordinatorNetDevice = DynamicCast<LrWpanNetDevice>(*(this->GetDevices().Begin()));
+            Mac64Address coordinatorAddr = coordinatorNetDevice->GetMac()->GetExtendedAddress();
+
+            // MCPS-DATA.request 파라미터
+            McpsDataRequestParams params;
+            params.m_srcAddrMode = EXT_ADDR;
+            params.m_dstExtAddr = coordinatorAddr;
+            params.m_dstAddrMode = EXT_ADDR;
+            params.m_txOptions = TX_OPTION_ACK;
+            params.m_msduHandle = 0;
+
+            for(uint32_t i = 1; i < this->GetDevices().GetN(); i++) // first device is coordinator
+            {
+                Ptr<NetDevice> netDevice = this->GetDevices().Get(i);
+                Ptr<LrWpanNetDevice> lrWpanNetDevice = DynamicCast<LrWpanNetDevice>(netDevice);
+
+                // NS_LOG_UNCOND("device address is: " << lrWpanNetDevice->GetAddress());
+
+                Ptr<Packet> packet = Create<Packet>(PACKET_SIZE);
+
+                Time jitter = MilliSeconds(this->GetNetworkId() * (100 * this->GetNetworkId()));
+
+                Simulator::ScheduleWithContext(
+                    this->networkId + i,
+                    Simulator::Now() + jitter,
+                    &LrWpanMac::McpsDataRequest,
+                    lrWpanNetDevice->GetMac(),
+                    params,
+                    packet
+                );
+
+                Simulator::Schedule(
+                    Simulator::Now() + Seconds(1),
+                    MakeEvent(&PANNetwork::SendData, this)
+                );
+            }
+        }
 
     private:
+        int networkId;
         NodeContainer nodes;
         NetDeviceContainer devices;
 
@@ -193,23 +281,9 @@ class PANNetwork: public Object
 int PANNetwork::totalPanId = 0;
 
 static void
-McpsDataConfirm(Ptr<LrWpanNetDevice> device, McpsDataConfirmParams params)
-{
-    NS_LOG_UNCOND(Simulator::Now() << "\t" << device->GetAddress() << " sent data");
-}
-
-static void
-McpsDataIndication(Ptr<LrWpanNetDevice> device, McpsDataIndicationParams params, Ptr<Packet> packet)
-{
-    NS_LOG_UNCOND(Simulator::Now() << "\t" << device->GetAddress() << " got data, packet size: " << packet->GetSize());
-}
-
-static void
 DebugCallback()
 {
-    int i = 0;
-    i++;
-    NS_LOG_UNCOND("ddd" << i);
+    // NS_LOG_UNCOND("ddd");
 }
 
 int
@@ -217,9 +291,11 @@ main(int argc, char* argv[])
 {
     LogComponentEnableAll(LogLevel(LOG_PREFIX_TIME | LOG_PREFIX_FUNC | LOG_PREFIX_NODE));
     LogComponentEnable("LrWpanMac", LOG_DEBUG);
-    LogComponentEnable("SingleModelSpectrumChannel", LOG_DEBUG);
+    // LogComponentEnable("LrWpanPhy", LOG_DEBUG);
+    // LogComponentEnable("LrWpanNetDevice", LOG_DEBUG);
+    // LogComponentEnable("LrWpanCsmaCa", LOG_DEBUG);
 
-    vector<Ptr<PANNetwork>> panNetworks;
+    std::vector<Ptr<PANNetwork>> panNetworks;
 
     for(int i = 0; i < PAN_COUNT; i++)
     {
@@ -236,62 +312,23 @@ main(int argc, char* argv[])
     channel->AddPropagationLossModel(propModel);
     channel->SetPropagationDelayModel(delayModel);
 
-    for(vector<Ptr<PANNetwork>>::iterator panNetwork = panNetworks.begin(); panNetwork < panNetworks.end(); panNetwork++)
+    int logCh = 11;
+    for(std::vector<Ptr<PANNetwork>>::iterator panNetwork = panNetworks.begin(); panNetwork < panNetworks.end(); panNetwork++)
     {
+        NS_LOG_UNCOND("Setting up PAN network...(ID: " << (*panNetwork)->GetNetworkId() << ")");
         (*panNetwork)->Install();
-
-        // 각 PANNetwork에서의 첫 번째 노드가 해당 PAN의 코디네이터임
-        Ptr<LrWpanNetDevice> coordinatorNetDevice = DynamicCast<LrWpanNetDevice>((*panNetwork)->GetDevices().Get(0));
-        Mac64Address coordinatorAddr = coordinatorNetDevice->GetMac()->GetExtendedAddress();
-
-        McpsDataRequestParams params;
-        params.m_dstExtAddr = coordinatorAddr;
-        params.m_dstAddrMode = EXT_ADDR;
-        params.m_txOptions = TX_OPTION_NONE;
-        params.m_msduHandle = 0;
-
-        for(NetDeviceContainer::Iterator device = ++((*panNetwork)->GetDevices().Begin()); device < (*panNetwork)->GetDevices().End(); device++)
-        {
-            Ptr<NetDevice> netDevice = *device;
-            Ptr<LrWpanNetDevice> lrWpanNetDevice = DynamicCast<LrWpanNetDevice>(netDevice);
-            Ptr<Packet> packet = Create<Packet>(50);
-
-            Simulator::ScheduleWithContext(
-                0,
-                Seconds(5),
-                &LrWpanMac::McpsDataRequest,
-                lrWpanNetDevice->GetMac(),
-                params,
-                packet
-            );
-        }
+        (*panNetwork)->Start(logCh++);
+        (*panNetwork)->SendData();
         (*panNetwork)->InstallCallbacks();
     }
 
-    // Ptr<LrWpanNetDevice> dev = DynamicCast<LrWpanNetDevice>((*panNetworks.at(0)).GetDevices().Get(0));
-    // McpsDataRequestParams params;
-    // params.m_dstAddr = Mac16Address("00:03");
-    // params.m_txOptions = TX_OPTION_NONE;
-    // params.m_msduHandle = 0;
-
-
-    // Simulator::ScheduleWithContext(
-    //     0,
-    //     Seconds(5),
-    //     &LrWpanMac::McpsDataRequest,
-    //     dev->GetMac(),
-    //     params,
-    //     packet
-    // );
-
     Simulator::Schedule(
-        Seconds(1),
+        Seconds(5),
         &DebugCallback
     );
 
-    Simulator::Stop(Seconds(1500));
+    Simulator::Stop(Seconds(20));
     Simulator::Run();
-
 
     Simulator::Destroy();
 
