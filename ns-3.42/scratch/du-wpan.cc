@@ -20,6 +20,13 @@
 /*
  * This example demonstrates the use of DU-WPAN.
  * 
+ * 메니징 X -> 패킷 전송률이 떨어짐
+ * 메니징 O -> PAN이 많은 경우 지연 증가                    (totalSucRx / totalReqTx)
+ * 따라서 우리는 향후 연구에서 다른 무언가를 보여줄 예정      (totalSucRx / totalTriedTx)
+ * x축은 네트워크의 혼잡도를 보여주자
+ * 채널 호핑의 경우 몇번 전송하면 호핑 진행하도록 해보자
+ * CCA 확인해보고 하는 건 다음 버전에서 진행
+ * 내일 자정까지는 아마 시간 괜찮지 않을까 싶음
  */
 
 #include <ns3/core-module.h>
@@ -36,12 +43,15 @@
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 100     // PAN network count
-#define NODE_COUNT 50   // node in each PAN count
+#define PAN_COUNT 2     // PAN network count
+#define NODE_COUNT 5   // node in each PAN count
+#define SLOT_LENGTH 1000 // ms
+#define SLOT_INTERVAL 1000 // ms
+#define PACKET_SIZE 10  // packet size
+// #define NOISY_SLOT_INTERVAL 1 // add noise to slot interval
+#define SIM_TIME 1000
 
-#define SLOT_LENGTH 50 // ms
-
-#define PACKET_SIZE 20  // packet size
+#define SPREAD_RANGE 5 // default 20
 
 int totalRequestedTX = 0;
 int totalTriedTX = 0;
@@ -49,7 +59,33 @@ int totalSuccessfulRX = 0;
 
 void printResult()
 {
-    NS_LOG_UNCOND("\n\ntotal Requested TX: "<< totalRequestedTX << "\ttotal Tried TX: " << totalTriedTX << "\ttotal Successful RX: " << totalSuccessfulRX << "\tratio: " << (double) totalSuccessfulRX * 100 / totalTriedTX << "%");
+    #ifndef NOISY_SLOT_INTERVAL
+    #define NOISY_SLOT_INTERVAL 0
+    NS_LOG_UNCOND(
+        "\n\nCONFIGURATION\nPAN network count: "
+        << PAN_COUNT
+        << "\nnode count per PAN: "
+        << NODE_COUNT
+        << "\nslot length(ms): "
+        << SLOT_LENGTH
+        << "\nslot interval(ms): "
+        << SLOT_INTERVAL
+        << "\nnoise in interval: "
+        << NOISY_SLOT_INTERVAL
+        << "\npacket size: "
+        << PACKET_SIZE
+        << "\ntotal Requested TX: "
+        << totalRequestedTX
+        << "\ntotal Tried TX: "
+        << totalTriedTX
+        << "\ttotal Successful RX: "
+        << totalSuccessfulRX
+        << "\tratio: "
+        << (double) totalSuccessfulRX * 100 / totalTriedTX
+        << "%\n\n"
+    );
+    #undef NOISY_SLOT_INTERVAL
+    #endif
 }
 
 class PANNetwork: public Object
@@ -66,10 +102,9 @@ class PANNetwork: public Object
 
         PANNetwork()
         {
-
             Ptr<UniformRandomVariable> random = CreateObject<UniformRandomVariable>();
             random->SetAttribute("Min", DoubleValue(0));
-            random->SetAttribute("Max", DoubleValue(5));
+            random->SetAttribute("Max", DoubleValue(SPREAD_RANGE));
 
             // setup helpers
             this->mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -80,7 +115,7 @@ class PANNetwork: public Object
                 "Y",
                 DoubleValue(totalPanId * 20), // y축 시작 좌표
                 "Rho",
-                PointerValue(random) // 반경
+                PointerValue(random)          // 반경
             );
 
             Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
@@ -114,7 +149,7 @@ class PANNetwork: public Object
         static void McpsDataIndicationCallback(McpsDataIndicationParams params, Ptr<Packet> packet)
         {
             totalSuccessfulRX++;
-            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
+            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
         }
 
         static void BeaconIndicationCallback(MlmeBeaconNotifyIndicationParams params)
@@ -145,7 +180,6 @@ class PANNetwork: public Object
 
         void SetChannel(Ptr<SingleModelSpectrumChannel> channel)
         {
-
             this->channel = channel;
             this->helper.SetChannel(channel);
         }
@@ -189,11 +223,11 @@ class PANNetwork: public Object
             // params.m_sfrmOrd = 6;
             params.m_logCh = 11; // 11~26
 
-            Time jitter = MilliSeconds((50 * this->GetNetworkId()));
+            Time jitter = MilliSeconds(this->GetNetworkId());
 
             Simulator::ScheduleWithContext(
                 this->networkId,
-                jitter,
+                Seconds(0),
                 &LrWpanMac::MlmeStartRequest,
                 coordinatorNetDevice->GetMac(),
                 params
@@ -216,17 +250,17 @@ class PANNetwork: public Object
             params.m_txOptions = TX_OPTION_NONE;
             params.m_msduHandle = 0;
 
+            Time oneBeaconTime = MilliSeconds(SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL);
+
             for(uint32_t i = 1; i < this->GetDevices().GetN(); i++) // first device is coordinator
             {
                 Ptr<NetDevice> netDevice = this->GetDevices().Get(i);
                 Ptr<LrWpanNetDevice> lrWpanNetDevice = DynamicCast<LrWpanNetDevice>(netDevice);
 
-                // NS_LOG_UNCOND("device address is: " << lrWpanNetDevice->GetAddress());
-
                 Ptr<Packet> packet = Create<Packet>(PACKET_SIZE);
 
-                Time delay = MilliSeconds(SLOT_LENGTH * i);
-
+                Time delay = MilliSeconds(SLOT_LENGTH * (i-1));
+                NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tPAN " << this->GetNetworkId() << ": device " << i << " - scheduled [" << (Simulator::Now() + delay).As(Time::S) << " ~ " << (Simulator::Now() + delay + MilliSeconds(SLOT_LENGTH)).As(Time::S) << "]");
                 Simulator::ScheduleWithContext(
                     this->networkId + i,
                     Simulator::Now() + delay,
@@ -238,8 +272,16 @@ class PANNetwork: public Object
                 totalRequestedTX++;
             }
 
+            int noise = 0;
+
+            #ifdef NOISY_SLOT_INTERVAL
+            Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable>();
+            noise = 1 + x->GetInteger() % (SLOT_INTERVAL);
+            #endif
+
+            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t:: next beacon will be called at: " << (oneBeaconTime+Simulator::Now()).As(Time::S) << ", PAN " << this->GetNetworkId());
             Simulator::Schedule(
-                Simulator::Now() + MilliSeconds(SLOT_LENGTH),
+                oneBeaconTime - MilliSeconds(noise),
                 MakeEvent(&PANNetwork::SendData, this)
             );
         }
@@ -261,11 +303,11 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnableAll(LogLevel(LOG_PREFIX_TIME | LOG_PREFIX_FUNC | LOG_PREFIX_NODE));
-    LogComponentEnable("LrWpanMac", LOG_ERROR);
+    // LogComponentEnable("LrWpanMac", LOG_ALL);
     // LogComponentEnable("SingleModelSpectrumChannel", LOG_FUNCTION);
-    // LogComponentEnable("LrWpanPhy", LOG_DEBUG);
-    // LogComponentEnable("LrWpanNetDevice", LOG_FUNCTION);
-    // LogComponentEnable("LrWpanCsmaCa", LOG_DEBUG);
+    // LogComponentEnable("LrWpanPhy", LOG_ALL);
+    // LogComponentEnable("LrWpanNetDevice", LOG_ALL);
+    // LogComponentEnable("LrWpanCsmaCa", LOG_ALL);
 
     std::vector<Ptr<PANNetwork>> panNetworks;
 
@@ -292,7 +334,8 @@ main(int argc, char* argv[])
         (*panNetwork)->InstallCallbacks();
 
         Simulator::Schedule(
-            MilliSeconds((*panNetwork)->GetNetworkId() * SLOT_LENGTH * (NODE_COUNT + 1)),
+            // MilliSeconds((*panNetwork)->GetNetworkId() * SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL),
+            Seconds(0),
             MakeEvent(
                 &PANNetwork::SendData,
                 (*panNetwork)
@@ -301,15 +344,14 @@ main(int argc, char* argv[])
     }
 
     Simulator::Schedule(
-        Seconds(9.9999),
+        Seconds(SIM_TIME) - NanoSeconds(1),
         MakeEvent(printResult)
     );
 
-    Simulator::Stop(Seconds(10));
+    Simulator::Stop(Seconds(SIM_TIME));
     Simulator::Run();
 
     Simulator::Destroy();
-
 
     return 0;
 }
