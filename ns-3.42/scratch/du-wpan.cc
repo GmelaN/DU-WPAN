@@ -36,10 +36,21 @@
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 10     // PAN network count
-#define NODE_COUNT 20   // node in each PAN count
+#define PAN_COUNT 100     // PAN network count
+#define NODE_COUNT 50   // node in each PAN count
 
-#define PACKET_SIZE 50 // packet size
+#define SLOT_LENGTH 50 // ms
+
+#define PACKET_SIZE 20  // packet size
+
+int totalRequestedTX = 0;
+int totalTriedTX = 0;
+int totalSuccessfulRX = 0;
+
+void printResult()
+{
+    NS_LOG_UNCOND("\n\ntotal Requested TX: "<< totalRequestedTX << "\ttotal Tried TX: " << totalTriedTX << "\ttotal Successful RX: " << totalSuccessfulRX << "\tratio: " << (double) totalSuccessfulRX * 100 / totalTriedTX << "%");
+}
 
 class PANNetwork: public Object
 {
@@ -53,62 +64,24 @@ class PANNetwork: public Object
             return tid;
         }
 
-        PANNetwork(int nodeCount)
-        {
-            // setup helpers
-            this->mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            this->mobility.SetPositionAllocator("ns3::GridPositionAllocator",
-                                        "MinX",
-                                        DoubleValue(0.0),
-                                        "MinY",
-                                        DoubleValue(0.0),
-                                        "DeltaX",
-                                        DoubleValue(30.0),
-                                        "DeltaY",
-                                        DoubleValue(30.0),
-                                        "GridWidth",
-                                        UintegerValue(20),
-                                        "LayoutType",
-                                        StringValue("RowFirst"));
-
-            Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
-            Ptr<LogDistancePropagationLossModel> propModel =
-                CreateObject<LogDistancePropagationLossModel>();
-            Ptr<ConstantSpeedPropagationDelayModel> delayModel =
-                CreateObject<ConstantSpeedPropagationDelayModel>();
-
-            channel->AddPropagationLossModel(propModel);
-            channel->SetPropagationDelayModel(delayModel);
-
-            this->channel = channel;
-
-            // install mobiilty
-            nodes.Create(nodeCount);
-
-            for(int i = 0; i < nodeCount; i++)
-            {
-                Ptr<Node> node = this->nodes.Get(i);
-            }
-            this->networkId = totalPanId++;
-        }
-
         PANNetwork()
         {
+
+            Ptr<UniformRandomVariable> random = CreateObject<UniformRandomVariable>();
+            random->SetAttribute("Min", DoubleValue(0));
+            random->SetAttribute("Max", DoubleValue(5));
+
             // setup helpers
             this->mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-            this->mobility.SetPositionAllocator("ns3::GridPositionAllocator",
-                                        "MinX",
-                                        DoubleValue(0.0),
-                                        "MinY",
-                                        DoubleValue(0.0),
-                                        "DeltaX",
-                                        DoubleValue(30.0),
-                                        "DeltaY",
-                                        DoubleValue(30.0),
-                                        "GridWidth",
-                                        UintegerValue(20),
-                                        "LayoutType",
-                                        StringValue("RowFirst"));
+            this->mobility.SetPositionAllocator(
+                "ns3::RandomDiscPositionAllocator",
+                "X",
+                DoubleValue(totalPanId * 20), // x축 시작 좌표
+                "Y",
+                DoubleValue(totalPanId * 20), // y축 시작 좌표
+                "Rho",
+                PointerValue(random) // 반경
+            );
 
             Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
             Ptr<LogDistancePropagationLossModel> propModel =
@@ -122,8 +95,9 @@ class PANNetwork: public Object
             this->channel = channel;
 
             // install mobiilty
-            nodes.Create(10);
-            for(int i = 0; i < 10; i++)
+            nodes.Create(NODE_COUNT);
+
+            for(int i = 0; i < NODE_COUNT; i++)
             {
                 Ptr<Node> node = this->nodes.Get(i);
             }
@@ -133,17 +107,19 @@ class PANNetwork: public Object
         // callback methods
         static void McpsDataConfirmCallback(McpsDataConfirmParams params)
         {
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t" << params.m_status << ": MCPS-DATA confirmed, data successfully sent.");
+            totalTriedTX++;
+            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t" << params.m_status << ": MCPS-DATA confirmed, data successfully sent.");
         }
 
         static void McpsDataIndicationCallback(McpsDataIndicationParams params, Ptr<Packet> packet)
         {
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
+            totalSuccessfulRX++;
+            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
         }
 
         static void BeaconIndicationCallback(MlmeBeaconNotifyIndicationParams params)
         {
-            NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " secs | Received BEACON packet of size ");
+            // NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " secs | Received BEACON packet of size ");
         }
 
         // getter, setter
@@ -169,6 +145,7 @@ class PANNetwork: public Object
 
         void SetChannel(Ptr<SingleModelSpectrumChannel> channel)
         {
+
             this->channel = channel;
             this->helper.SetChannel(channel);
         }
@@ -196,28 +173,21 @@ class PANNetwork: public Object
             }
         }
 
-        void Start(int logicalChannel)
+        void Start()
         {
-            logicalChannel = logicalChannel % 16 + 11;
-
             NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tScheduling MLME-START.request...(ID: " << this->networkId << ")");
 
             // 각 네트워크의 가장 첫 번째 디바이스가 코디네이터임
             Ptr<LrWpanNetDevice> coordinatorNetDevice = DynamicCast<LrWpanNetDevice>(*(this->GetDevices().Begin()));
             // NS_LOG_UNCOND("coordinator address is: " << coordinatorNetDevice->GetAddress());
 
-            // Ptr<MacPibAttributes> attr = CreateObject<MacPibAttributes>();
-            // Ptr<Packet> macBeaconPayload = CreateObject<Packet>();
-            // attr->macBeaconPayload = macBeaconPayload;
-            // coordinatorNetDevice->GetMac()->MlmeSetRequest(MacPibAttributeIdentifier::macBeaconPayload, )
-
             // MCPS-DATA.request 파라미터
             MlmeStartRequestParams params;
             params.m_PanId = this->networkId;
             params.m_panCoor = true;
-            // params.m_bcnOrd = 2;
-            // params.m_sfrmOrd = 1;
-            params.m_logCh = logicalChannel; // 11~26
+            // params.m_bcnOrd = 14;
+            // params.m_sfrmOrd = 6;
+            params.m_logCh = 11; // 11~26
 
             Time jitter = MilliSeconds((50 * this->GetNetworkId()));
 
@@ -232,7 +202,7 @@ class PANNetwork: public Object
 
         void SendData()
         {
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tScheduling MCPS-DATA.request...(ID: " << this->networkId << ")");
+            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tScheduling MCPS-DATA.request...(ID: " << this->networkId << ")");
 
             // 각 네트워크의 가장 첫 번째 디바이스가 코디네이터임
             Ptr<LrWpanNetDevice> coordinatorNetDevice = DynamicCast<LrWpanNetDevice>(*(this->GetDevices().Begin()));
@@ -255,20 +225,21 @@ class PANNetwork: public Object
 
                 Ptr<Packet> packet = Create<Packet>(PACKET_SIZE);
 
-                Time jitter = MilliSeconds(1000 * this->GetNetworkId() + (100 * i));
+                Time delay = MilliSeconds(SLOT_LENGTH * i);
 
                 Simulator::ScheduleWithContext(
                     this->networkId + i,
-                    Simulator::Now() + jitter,
+                    Simulator::Now() + delay,
                     &LrWpanMac::McpsDataRequest,
                     lrWpanNetDevice->GetMac(),
                     params,
                     packet
                 );
+                totalRequestedTX++;
             }
 
             Simulator::Schedule(
-                Simulator::Now() + Seconds(10),
+                Simulator::Now() + MilliSeconds(SLOT_LENGTH),
                 MakeEvent(&PANNetwork::SendData, this)
             );
         }
@@ -290,17 +261,17 @@ int
 main(int argc, char* argv[])
 {
     LogComponentEnableAll(LogLevel(LOG_PREFIX_TIME | LOG_PREFIX_FUNC | LOG_PREFIX_NODE));
-    LogComponentEnable("LrWpanMac", LOG_FUNCTION);
+    LogComponentEnable("LrWpanMac", LOG_ERROR);
     // LogComponentEnable("SingleModelSpectrumChannel", LOG_FUNCTION);
     // LogComponentEnable("LrWpanPhy", LOG_DEBUG);
-    // LogComponentEnable("LrWpanNetDevice", LOG_DEBUG);
+    // LogComponentEnable("LrWpanNetDevice", LOG_FUNCTION);
     // LogComponentEnable("LrWpanCsmaCa", LOG_DEBUG);
 
     std::vector<Ptr<PANNetwork>> panNetworks;
 
     for(int i = 0; i < PAN_COUNT; i++)
     {
-        Ptr<PANNetwork> network = CreateObject<PANNetwork>(NODE_COUNT);
+        Ptr<PANNetwork> network = CreateObject<PANNetwork>();
         panNetworks.push_back(network);
     }
 
@@ -313,20 +284,32 @@ main(int argc, char* argv[])
     channel->AddPropagationLossModel(propModel);
     channel->SetPropagationDelayModel(delayModel);
 
-    int logCh = 11;
     for(std::vector<Ptr<PANNetwork>>::iterator panNetwork = panNetworks.begin(); panNetwork < panNetworks.end(); panNetwork++)
     {
         NS_LOG_UNCOND("Setting up PAN network...(ID: " << (*panNetwork)->GetNetworkId() << ")");
         (*panNetwork)->Install();
-        (*panNetwork)->Start(logCh++);
-        (*panNetwork)->SendData();
+        (*panNetwork)->Start();
         (*panNetwork)->InstallCallbacks();
+
+        Simulator::Schedule(
+            MilliSeconds((*panNetwork)->GetNetworkId() * SLOT_LENGTH * (NODE_COUNT + 1)),
+            MakeEvent(
+                &PANNetwork::SendData,
+                (*panNetwork)
+            )
+        );
     }
 
-    Simulator::Stop(Seconds(5));
+    Simulator::Schedule(
+        Seconds(9.9999),
+        MakeEvent(printResult)
+    );
+
+    Simulator::Stop(Seconds(10));
     Simulator::Run();
 
     Simulator::Destroy();
+
 
     return 0;
 }
