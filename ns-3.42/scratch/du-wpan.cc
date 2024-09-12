@@ -43,13 +43,13 @@
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 2     // PAN network count
+#define PAN_COUNT 3     // PAN network count
 #define NODE_COUNT 5   // node in each PAN count
 #define SLOT_LENGTH 1000 // ms
 #define SLOT_INTERVAL 1000 // ms
 #define PACKET_SIZE 10  // packet size
 // #define NOISY_SLOT_INTERVAL 1 // add noise to slot interval
-#define SIM_TIME 1000
+#define SIM_TIME 30
 
 #define SPREAD_RANGE 5 // default 20
 
@@ -263,7 +263,7 @@ class PANNetwork: public Object
                 NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tPAN " << this->GetNetworkId() << ": device " << i << " - scheduled [" << (Simulator::Now() + delay).As(Time::S) << " ~ " << (Simulator::Now() + delay + MilliSeconds(SLOT_LENGTH)).As(Time::S) << "]");
                 Simulator::ScheduleWithContext(
                     this->networkId + i,
-                    Simulator::Now() + delay,
+                    delay,
                     &LrWpanMac::McpsDataRequest,
                     lrWpanNetDevice->GetMac(),
                     params,
@@ -279,9 +279,9 @@ class PANNetwork: public Object
             noise = 1 + x->GetInteger() % (SLOT_INTERVAL);
             #endif
 
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t:: next beacon will be called at: " << (oneBeaconTime+Simulator::Now()).As(Time::S) << ", PAN " << this->GetNetworkId());
+            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t:: next beacon will be called at: " << (MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL - noise) * (PAN_COUNT))+Simulator::Now()).As(Time::S) << ", PAN " << this->GetNetworkId());
             Simulator::Schedule(
-                oneBeaconTime - MilliSeconds(noise),
+                MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL - noise) * (PAN_COUNT)),
                 MakeEvent(&PANNetwork::SendData, this)
             );
         }
@@ -329,13 +329,15 @@ main(int argc, char* argv[])
     for(std::vector<Ptr<PANNetwork>>::iterator panNetwork = panNetworks.begin(); panNetwork < panNetworks.end(); panNetwork++)
     {
         NS_LOG_UNCOND("Setting up PAN network...(ID: " << (*panNetwork)->GetNetworkId() << ")");
+        (*panNetwork)->SetChannel(channel);
         (*panNetwork)->Install();
         (*panNetwork)->Start();
         (*panNetwork)->InstallCallbacks();
 
         Simulator::Schedule(
             // MilliSeconds((*panNetwork)->GetNetworkId() * SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL),
-            Seconds(0),
+            MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL) * (*panNetwork)->GetNetworkId()),
+            // Seconds(0),
             MakeEvent(
                 &PANNetwork::SendData,
                 (*panNetwork)
