@@ -43,14 +43,15 @@
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 3     // PAN network count
-#define NODE_COUNT 5   // node in each PAN count
-#define SLOT_LENGTH 1000 // ms
-#define SLOT_INTERVAL 1000 // ms
-#define PACKET_SIZE 10  // packet size
-// #define NOISY_SLOT_INTERVAL 1 // add noise to slot interval
-#define SIM_TIME 30
+#define PAN_COUNT 10     // PAN network count
+#define NODE_COUNT 50   // node in each PAN count
 
+#define SLOT_INTERVAL 1 // ms
+#define PACKET_SIZE 50  // packet size
+// #define NOISY_SLOT_INTERVAL 1 // add noise to slot interval
+
+#define SIM_TIME 3600
+#define SLOT_LENGTH 1   // ms
 #define SPREAD_RANGE 5 // default 20
 
 int totalRequestedTX = 0;
@@ -59,18 +60,15 @@ int totalSuccessfulRX = 0;
 
 void printResult()
 {
-    #ifndef NOISY_SLOT_INTERVAL
-    #define NOISY_SLOT_INTERVAL 0
+    #ifdef NOISY_SLOT_INTERVAL
     NS_LOG_UNCOND(
         "\n\nCONFIGURATION\nPAN network count: "
         << PAN_COUNT
         << "\nnode count per PAN: "
         << NODE_COUNT
-        << "\nslot length(ms): "
-        << SLOT_LENGTH
         << "\nslot interval(ms): "
         << SLOT_INTERVAL
-        << "\nnoise in interval: "
+        << "\nNONE"
         << NOISY_SLOT_INTERVAL
         << "\npacket size: "
         << PACKET_SIZE
@@ -84,8 +82,39 @@ void printResult()
         << (double) totalSuccessfulRX * 100 / totalTriedTX
         << "%\n\n"
     );
-    #undef NOISY_SLOT_INTERVAL
+    #else
+        NS_LOG_UNCOND(
+        "\n\nCONFIGURATION\nPAN network count: "
+        << PAN_COUNT
+        << "\nnode count per PAN: "
+        << NODE_COUNT
+        << "\nslot length(ms): "
+        << SLOT_LENGTH
+        << "\nslot interval(ms): "
+        << SLOT_INTERVAL
+        << "\nBEACON_SHIFTING"
+        << "\npacket size: "
+        << PACKET_SIZE
+        << "\ntotal Requested TX: "
+        << totalRequestedTX
+        << "\ntotal Tried TX: "
+        << totalTriedTX
+        << "\ttotal Successful RX: "
+        << totalSuccessfulRX
+        << "\tratio: "
+        << (double) totalSuccessfulRX * 100 / totalTriedTX
+        << "%\n\n"
+    );
     #endif
+}
+
+void aaa()
+{
+    NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t !!");
+    Simulator::Schedule(
+        Seconds(30),
+        MakeEvent(&aaa)
+    );
 }
 
 class PANNetwork: public Object
@@ -149,7 +178,7 @@ class PANNetwork: public Object
         static void McpsDataIndicationCallback(McpsDataIndicationParams params, Ptr<Packet> packet)
         {
             totalSuccessfulRX++;
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
+            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tdata from " << params.m_srcExtAddr << " successfully received, MCPS-DATA.indication issued.");
         }
 
         static void BeaconIndicationCallback(MlmeBeaconNotifyIndicationParams params)
@@ -260,7 +289,7 @@ class PANNetwork: public Object
                 Ptr<Packet> packet = Create<Packet>(PACKET_SIZE);
 
                 Time delay = MilliSeconds(SLOT_LENGTH * (i-1));
-                NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tPAN " << this->GetNetworkId() << ": device " << i << " - scheduled [" << (Simulator::Now() + delay).As(Time::S) << " ~ " << (Simulator::Now() + delay + MilliSeconds(SLOT_LENGTH)).As(Time::S) << "]");
+                // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\tPAN " << this->GetNetworkId() << ": device " << i << " - scheduled [" << (Simulator::Now() + delay).As(Time::S) << " ~ " << (Simulator::Now() + delay + MilliSeconds(SLOT_LENGTH)).As(Time::S) << "]");
                 Simulator::ScheduleWithContext(
                     this->networkId + i,
                     delay,
@@ -276,10 +305,10 @@ class PANNetwork: public Object
 
             #ifdef NOISY_SLOT_INTERVAL
             Ptr<UniformRandomVariable> x = CreateObject<UniformRandomVariable>();
-            noise = 1 + x->GetInteger() % (SLOT_INTERVAL);
+            noise = x->GetInteger() % 50;
             #endif
 
-            NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t:: next beacon will be called at: " << (MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL - noise) * (PAN_COUNT))+Simulator::Now()).As(Time::S) << ", PAN " << this->GetNetworkId());
+            // NS_LOG_UNCOND(Simulator::Now().As(Time::S) << "\t:: next beacon will be called at: " << (MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL - noise) * (PAN_COUNT))+Simulator::Now()).As(Time::S) << ", PAN " << this->GetNetworkId());
             Simulator::Schedule(
                 MilliSeconds((SLOT_LENGTH * (NODE_COUNT - 1) + SLOT_INTERVAL - noise) * (PAN_COUNT)),
                 MakeEvent(&PANNetwork::SendData, this)
@@ -346,11 +375,41 @@ main(int argc, char* argv[])
     }
 
     Simulator::Schedule(
-        Seconds(SIM_TIME) - NanoSeconds(1),
-        MakeEvent(printResult)
+        Seconds(300),
+        MakeEvent(&printResult)
     );
 
-    Simulator::Stop(Seconds(SIM_TIME));
+    Simulator::Schedule(
+        Seconds(600),
+        MakeEvent(&printResult)
+    );
+
+    Simulator::Schedule(
+        Seconds(1800),
+        MakeEvent(&printResult)
+    );
+
+    Simulator::Schedule(
+        Seconds(2400),
+        MakeEvent(&printResult)
+    );
+
+    Simulator::Schedule(
+        Seconds(3000),
+        MakeEvent(&printResult)
+    );
+
+    Simulator::Schedule(
+        Seconds(3600),
+        MakeEvent(&printResult)
+    );
+
+    Simulator::Schedule(
+        Seconds(30),
+        MakeEvent(&aaa)
+    );
+
+    Simulator::Stop(Seconds(3601));
     Simulator::Run();
 
     Simulator::Destroy();
