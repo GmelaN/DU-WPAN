@@ -1,15 +1,5 @@
-/*
- *   Coordinator              End Device
- *       N0   <----------------  N1
- *      (dev0)                 (dev1)
- *
- * This example demonstrate the usage of the MAC primitives involved in
- * direct transmissions for the beacon enabled mode of IEEE 802.15.4-2011.
- * A single packet is sent from an end device to the coordinator during the CAP
- * of the first incoming superframe.
- *
- * This example do not demonstrate a full protocol stack usage.
- * For full protocol stack usage refer to 6lowpan examples.
+/*  
+ *  
  */
 
 #include <ns3/constant-position-mobility-model.h>
@@ -20,11 +10,18 @@
 #include <ns3/propagation-delay-model.h>
 #include <ns3/propagation-loss-model.h>
 #include <ns3/simulator.h>
-#include <ns3/single-model-spectrum-channel.h>
+
+#include <ns3/multi-model-spectrum-channel.h>
+// #include <ns3/single-model-spectrum-channel.h>
+
+#include <ns3/wifi-module.h>
+#include <ns3/network-module.h>
+#include <ns3/internet-module.h>
+#include <ns3/applications-module.h>
+#include <ns3/mobility-helper.h>
 
 #include <iostream>
 
-#define CHANGE_CHANNEL_IN_RUNTIME
 
 using namespace ns3;
 using namespace ns3::lrwpan;
@@ -40,6 +37,7 @@ DataIndication(McpsDataIndicationParams params, Ptr<Packet> p)
 {
     NS_LOG_UNCOND(Simulator::Now().GetSeconds()
                   << " secs | Received DATA packet of size " << p->GetSize());
+    p->Print(std::cout);
 }
 
 void
@@ -47,190 +45,298 @@ TransEndIndication(McpsDataConfirmParams params)
 {
     // In the case of transmissions with the Ack flag activated, the transaction is only
     // successful if the Ack was received.
-    if (params.m_status == MacStatus::SUCCESS)
+    if(params.m_status == MacStatus::SUCCESS)
     {
         NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " Transmission successfully sent");
     }
 }
 
 void
-DataIndicationCoordinator(McpsDataIndicationParams params, Ptr<Packet> p)
-{
-    NS_LOG_UNCOND(Simulator::Now().GetSeconds()
-                  << "s Coordinator Received DATA packet (size " << p->GetSize() << " bytes)");
-}
-
-void
 StartConfirm(MlmeStartConfirmParams params)
 {
-    if (params.m_status == MacStatus::SUCCESS)
+    if(params.m_status == MacStatus::SUCCESS)
     {
         NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " Beacon status SUCCESSFUL");
     }
 }
 
-
-#ifdef CHANGE_CHANNEL_IN_RUNTIME
-void
-changeChannel(Ptr<Node> node, Ptr<SpectrumChannel> targetChannel)
-{
-    Ptr<LrWpanNetDevice> netDevice = DynamicCast<LrWpanNetDevice>(node->GetDevice(0));
-    netDevice->SetChannel(targetChannel);
-    NS_LOG_UNCOND(Simulator::Now().GetSeconds() << " device " << node->GetId() << "'s channel has been changed to: "<< targetChannel->GetId());
-
-    return;
-}
-#endif
-
 int
 main(int argc, char* argv[])
 {
-    LogComponentEnableAll(LOG_PREFIX_TIME);
-    LogComponentEnableAll(LOG_PREFIX_FUNC);
-    LogComponentEnable("LrWpanMac", LOG_LEVEL_INFO);
-    LogComponentEnable("LrWpanCsmaCa", LOG_LEVEL_INFO);
+    PacketMetadata::Enable();
 
-    LrWpanHelper lrWpanHelper;
+    // Create nodes
+    NodeContainer wifiStaNodes;
+    wifiStaNodes.Create(1);
+    NodeContainer wifiApNode;
+    wifiApNode.Create(10);
+    // Set up Wi-Fi channel with MultiModelSpectrumChannel
+    Ptr<MultiModelSpectrumChannel> channel = CreateObject<MultiModelSpectrumChannel>();
+    Ptr<LogDistancePropagationLossModel> lossModel = CreateObject<LogDistancePropagationLossModel>();
+    channel->AddPropagationLossModel(lossModel);
+    Ptr<ConstantSpeedPropagationDelayModel> delayModel = CreateObject<ConstantSpeedPropagationDelayModel>();
+    channel->SetPropagationDelayModel(delayModel);
 
-    // Create 2 nodes, and a NetDevice for each one
+    // Set up Wi-Fi PHY and MAC using SpectrumWifiPhyHelper
+    SpectrumWifiPhyHelper phy = SpectrumWifiPhyHelper(1);
+    FrequencyRange r;
+    r.minFrequency = 2400;
+    r.maxFrequency = 2420;
+    phy.AddPhyToFreqRangeMapping(1, r);
+    phy.SetChannel(channel);
+
+    WifiHelper wifi;
+    wifi.SetStandard(WIFI_STANDARD_80211n);
+    wifi.SetRemoteStationManager("ns3::MinstrelHtWifiManager");
+
+    WifiMacHelper mac;
+    Ssid ssid = Ssid("ns-3-ssid");
+
+    mac.SetType("ns3::StaWifiMac",
+                "Ssid", SsidValue(ssid),
+                "ActiveProbing", BooleanValue(false));
+    NetDeviceContainer staDevices;
+    staDevices = wifi.Install(phy, mac, wifiStaNodes);
+
+    mac.SetType("ns3::ApWifiMac",
+                "Ssid", SsidValue(ssid));
+    NetDeviceContainer apDevices;
+    apDevices = wifi.Install(phy, mac, wifiApNode);
+
+    // Set mobility model
+    MobilityHelper mobility;
+    mobility.SetPositionAllocator("ns3::GridPositionAllocator",
+                                    "MinX", DoubleValue(-5.0),
+                                    "MinY", DoubleValue(-5.0),
+                                    "DeltaX", DoubleValue(5.0),
+                                    "DeltaY", DoubleValue(5.0),
+                                    "GridWidth", UintegerValue(2),
+                                    "LayoutType", StringValue("RowFirst"));
+
+    mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    mobility.Install(wifiApNode);
+    mobility.Install(wifiStaNodes);
+
+    // Install Internet stack
+    InternetStackHelper stack;
+    stack.Install(wifiApNode);
+    stack.Install(wifiStaNodes);
+
+    Ipv4AddressHelper address;
+    address.SetBase("10.1.3.0", "255.255.255.0");
+    Ipv4InterfaceContainer staInterfaces;
+    staInterfaces = address.Assign(staDevices);
+    Ipv4InterfaceContainer apInterface;
+    apInterface = address.Assign(apDevices);
+
+    // Install applications
+    UdpEchoServerHelper echoServer(9);
+    ApplicationContainer serverApp = echoServer.Install(wifiApNode.Get(0));
+    serverApp.Start(Seconds(0.0));
+    serverApp.Stop(Seconds(5.0));
+
+    UdpEchoClientHelper echoClient(apInterface.GetAddress(0), 9);
+    echoClient.SetAttribute("MaxPackets", UintegerValue(0)); // Infinite packets
+    echoClient.SetAttribute("Interval", TimeValue(Seconds(0.0005))); // 5ms interval
+    echoClient.SetAttribute("PacketSize", UintegerValue(2048));
+
+    for (uint32_t i = 0; i < wifiStaNodes.GetN(); i++) {
+        ApplicationContainer clientApp = echoClient.Install(wifiStaNodes.Get(i));
+        clientApp.Start(Seconds(0.0));
+        clientApp.Stop(Seconds(5.0));
+    }
+
+
+
+
+
+
+    LogComponentEnableAll(LogLevel(LOG_PREFIX_TIME | LOG_PREFIX_FUNC | LOG_PREFIX_NODE));
+    LogComponentEnable("LrWpanMac", LOG_LOGIC);
+    // LogComponentEnable("SingleModelSpectrumChannel", LOG_DEBUG);
+    LogComponentEnable("LrWpanPhy", LOG_LOGIC);
+    // LogComponentEnable("SpectrumWifiPhy", LOG_INFO);
+    // LogComponentEnable("MultiModelSpectrumChannel", LOG_FUNCTION);
+    // LogComponentEnable("LrWpanNetDevice", LOG_FUNCTION);
+    LogComponentEnable("LrWpanCsmaCa", LOG_LOGIC);
+
+
+
+
+
     Ptr<Node> n0 = CreateObject<Node>();
     Ptr<Node> n1 = CreateObject<Node>();
+
+    Ptr<Node> n2 = CreateObject<Node>();
+    Ptr<Node> n3 = CreateObject<Node>();
 
     Ptr<LrWpanNetDevice> dev0 = CreateObject<LrWpanNetDevice>();
     Ptr<LrWpanNetDevice> dev1 = CreateObject<LrWpanNetDevice>();
 
+    Ptr<LrWpanNetDevice> dev2 = CreateObject<LrWpanNetDevice>();
+    Ptr<LrWpanNetDevice> dev3 = CreateObject<LrWpanNetDevice>();
+
     dev0->SetAddress(Mac16Address("00:01"));
     dev1->SetAddress(Mac16Address("00:02"));
 
-    Ptr<SingleModelSpectrumChannel> channel = CreateObject<SingleModelSpectrumChannel>();
-    Ptr<LogDistancePropagationLossModel> propModel =
-        CreateObject<LogDistancePropagationLossModel>();
-    Ptr<ConstantSpeedPropagationDelayModel> delayModel =
-        CreateObject<ConstantSpeedPropagationDelayModel>();
-    channel->AddPropagationLossModel(propModel);
-    channel->SetPropagationDelayModel(delayModel);
+    dev2->SetAddress(Mac16Address("00:03"));
+    dev3->SetAddress(Mac16Address("00:04"));
 
     dev0->SetChannel(channel);
     dev1->SetChannel(channel);
+    
+    dev2->SetChannel(channel);
+    dev3->SetChannel(channel);
 
     n0->AddDevice(dev0);
     n1->AddDevice(dev1);
+    
+    n2->AddDevice(dev2);
+    n3->AddDevice(dev3);
 
     Ptr<ConstantPositionMobilityModel> sender0Mobility =
         CreateObject<ConstantPositionMobilityModel>();
     sender0Mobility->SetPosition(Vector(0, 0, 0));
     dev0->GetPhy()->SetMobility(sender0Mobility);
+
     Ptr<ConstantPositionMobilityModel> sender1Mobility =
         CreateObject<ConstantPositionMobilityModel>();
-
     sender1Mobility->SetPosition(Vector(0, 10, 0)); // 10 m distance
     dev1->GetPhy()->SetMobility(sender1Mobility);
+
+    Ptr<ConstantPositionMobilityModel> sender2Mobility =
+        CreateObject<ConstantPositionMobilityModel>();
+    sender2Mobility->SetPosition(Vector(0, -10, 0)); // 10 m distance
+    dev2->GetPhy()->SetMobility(sender2Mobility);
+
+    Ptr<ConstantPositionMobilityModel> sender3Mobility =
+        CreateObject<ConstantPositionMobilityModel>();
+    sender3Mobility->SetPosition(Vector(0, -1, 0)); // 10 m distance
+    dev3->GetPhy()->SetMobility(sender3Mobility);
 
     /////// MAC layer Callbacks hooks/////////////
     MlmeStartConfirmCallback cb0;
     cb0 = MakeCallback(&StartConfirm);
     dev0->GetMac()->SetMlmeStartConfirmCallback(cb0);
+    dev1->GetMac()->SetMlmeStartConfirmCallback(cb0);
+    dev2->GetMac()->SetMlmeStartConfirmCallback(cb0);
+    dev3->GetMac()->SetMlmeStartConfirmCallback(cb0);
 
     McpsDataConfirmCallback cb1;
     cb1 = MakeCallback(&TransEndIndication);
+    dev0->GetMac()->SetMcpsDataConfirmCallback(cb1);
     dev1->GetMac()->SetMcpsDataConfirmCallback(cb1);
+    dev2->GetMac()->SetMcpsDataConfirmCallback(cb1);
+    dev3->GetMac()->SetMcpsDataConfirmCallback(cb1);
 
     MlmeBeaconNotifyIndicationCallback cb3;
     cb3 = MakeCallback(&BeaconIndication);
+    dev0->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
     dev1->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
+    dev2->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
+    dev3->GetMac()->SetMlmeBeaconNotifyIndicationCallback(cb3);
 
     McpsDataIndicationCallback cb4;
     cb4 = MakeCallback(&DataIndication);
+    dev0->GetMac()->SetMcpsDataIndicationCallback(cb4);
     dev1->GetMac()->SetMcpsDataIndicationCallback(cb4);
+    dev2->GetMac()->SetMcpsDataIndicationCallback(cb4);
+    dev3->GetMac()->SetMcpsDataIndicationCallback(cb4);
 
-    McpsDataIndicationCallback cb5;
-    cb5 = MakeCallback(&DataIndicationCoordinator);
-    dev0->GetMac()->SetMcpsDataIndicationCallback(cb5);
-
-    //////////// Manual device association ////////////////////
-    // Note: We manually associate the devices to a PAN coordinator
-    //       (i.e. bootstrap is not used);
-    //       The PAN COORDINATOR does not need to associate or set its
-    //       PAN Id or its own coordinator id, these are set
-    //       by the MLME-start.request primitive when used.
-
+    dev0->GetMac()->SetPanId(5);
     dev1->GetMac()->SetPanId(5);
-    dev1->GetMac()->SetAssociatedCoor(Mac16Address("00:01"));
+    dev2->GetMac()->SetPanId(6);
+    dev3->GetMac()->SetPanId(6);
 
-    ///////////////////// Start transmitting beacons from coordinator ////////////////////////
+    dev1->GetMac()->SetAssociatedCoor(Mac16Address("00:01"));
+    dev3->GetMac()->SetAssociatedCoor(Mac16Address("00:04"));
 
     MlmeStartRequestParams params;
     params.m_panCoor = true;
     params.m_PanId = 5;
-    params.m_bcnOrd = 14;
-    params.m_sfrmOrd = 6;
+    params.m_bcnOrd = 15;
+    params.m_sfrmOrd = 15;
+    params.m_logCh = 11;
     Simulator::ScheduleWithContext(1,
-                                   Seconds(2.0),
+                                   Seconds(0.0),
                                    &LrWpanMac::MlmeStartRequest,
                                    dev0->GetMac(),
                                    params);
 
+    MlmeStartRequestParams params1;
+    params1.m_panCoor = false;
+    params1.m_logCh = 11;
+    Simulator::ScheduleWithContext(2,
+                                   Seconds(0.0),
+                                   &LrWpanMac::MlmeStartRequest,
+                                   dev1->GetMac(),
+                                   params1);
+
+    MlmeStartRequestParams params2;
+    params2.m_panCoor = true;
+    params2.m_PanId = 6;
+    params2.m_bcnOrd = 15;
+    params2.m_sfrmOrd = 15;
+    params2.m_logCh = 26;
+    Simulator::ScheduleWithContext(1,
+                                   Seconds(0.0),
+                                   &LrWpanMac::MlmeStartRequest,
+                                   dev2->GetMac(),
+                                   params2);
+    
+    MlmeStartRequestParams params3;
+    params3.m_panCoor = false;
+    params3.m_logCh = 26;
+    Simulator::ScheduleWithContext(1,
+                                   Seconds(0.0),
+                                   &LrWpanMac::MlmeStartRequest,
+                                   dev3->GetMac(),
+                                   params3);
+
     ///////////////////// Transmission of data Packets from end device //////////////////////
 
-    Ptr<Packet> p1 = Create<Packet>(5);
-    McpsDataRequestParams params2;
-    params2.m_dstPanId = 5;
-    params2.m_srcAddrMode = SHORT_ADDR;
-    params2.m_dstAddrMode = SHORT_ADDR;
-    params2.m_dstAddr = Mac16Address("00:01");
-    params2.m_msduHandle = 0;
-    params2.m_txOptions = TX_OPTION_NONE;
+    McpsDataRequestParams params4;
+    params4.m_dstPanId = 5;
+    params4.m_srcAddrMode = SHORT_ADDR;
+    params4.m_dstAddrMode = SHORT_ADDR;
+    params4.m_dstAddr = Mac16Address("00:01");
+    params4.m_msduHandle = 0;
+    params4.m_txOptions = TX_OPTION_NONE;
 
-    Simulator::ScheduleWithContext(1,
-                                   Seconds(2.5),
-                                   &LrWpanMac::McpsDataRequest,
-                                   dev1->GetMac(),
-                                   params2,
-                                   p1);
-    
-    #ifdef CHANGE_CHANNEL_IN_RUNTIME
-    Ptr<SingleModelSpectrumChannel> anotherChannel = CreateObject<SingleModelSpectrumChannel>();
-    Ptr<LogDistancePropagationLossModel> anotherPropModel =
-        CreateObject<LogDistancePropagationLossModel>();
-    Ptr<ConstantSpeedPropagationDelayModel> anotherDelayModel =
-        CreateObject<ConstantSpeedPropagationDelayModel>();
-    anotherChannel->AddPropagationLossModel(anotherPropModel);
-    anotherChannel->SetPropagationDelayModel(anotherDelayModel);
+    for(int i = 0; i < 20; i++) {
+        Ptr<Packet> packet = Create<Packet>(50);
+        packet->EnablePrinting();
 
-    Simulator::ScheduleWithContext(
-        2,
-        Seconds(3.1),
-        &changeChannel,
-        n0,
-        anotherChannel
-    );
-    #endif
+        Simulator::ScheduleWithContext(1,
+                                        Seconds(0.3 + i * 0.1),
+                                        &LrWpanMac::McpsDataRequest,
+                                        dev1->GetMac(),
+                                        params4,
+                                        packet);
+    }
 
-    Simulator::ScheduleWithContext(3,
-                                Seconds(4),
-                                &LrWpanMac::McpsDataRequest,
-                                dev1->GetMac(),
-                                params2,
-                                p1);
+    McpsDataRequestParams params5;
+    params5.m_dstPanId = 6;
+    params5.m_srcAddrMode = SHORT_ADDR;
+    params5.m_dstAddrMode = SHORT_ADDR;
+    params5.m_dstAddr = Mac16Address("00:03");
+    params5.m_msduHandle = 0;
+    params5.m_txOptions = TX_OPTION_NONE;
 
-    #ifdef CHANGE_CHANNEL_IN_RUNTIME
-    Simulator::ScheduleWithContext(
-        4,
-        Seconds(4.1),
-        &changeChannel,
-        n0,
-        channel
-    );
-    #endif
+    for(int i = 0; i < 20; i++) {
+        Ptr<Packet> packet = Create<Packet>(100);
+        packet->EnablePrinting();
 
-    Simulator::ScheduleWithContext(5,
-                            Seconds(5),
-                            &LrWpanMac::McpsDataRequest,
-                            dev1->GetMac(),
-                            params2,
-                            p1);
+        Simulator::ScheduleWithContext(1,
+                                        Seconds(0.3 + i * 0.1),
+                                        &LrWpanMac::McpsDataRequest,
+                                        dev3->GetMac(),
+                                        params5,
+                                        packet);
+    }
 
-    Simulator::Stop(Seconds(600));
+
+    Simulator::Stop(Seconds(3));
     Simulator::Run();
 
     Simulator::Destroy();
