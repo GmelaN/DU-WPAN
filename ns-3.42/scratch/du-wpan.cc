@@ -43,8 +43,8 @@
 using namespace ns3;
 using namespace ns3::lrwpan;
 
-#define PAN_COUNT 10     // PAN network count
-#define NODE_COUNT 50   // node in each PAN count
+#define PAN_COUNT 3     // PAN network count
+#define NODE_COUNT 10   // node in each PAN count
 
 #define SLOT_INTERVAL 1 // ms
 #define PACKET_SIZE 50  // packet size
@@ -409,7 +409,7 @@ main(int argc, char* argv[])
         MakeEvent(&aaa)
     );
 
-    Simulator::Stop(Seconds(3601));
+    Simulator::Stop(Seconds(300));
     Simulator::Run();
 
     Simulator::Destroy();
